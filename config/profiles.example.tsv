@@ -1,0 +1,5 @@
+# id<TAB>vendor<TAB>label<TAB>host<TAB>port<TAB>user<TAB>ssh_key_path_or_-<TAB>stream_host_or_-
+# Replace example addresses and SSH key paths with your own resources.
+nvidia-demo	NVIDIA	RTX GPU worker	gpu.example.com	22	ubuntu	/Users/YOU/.ssh/id_ed25519	-
+amd-demo	AMD	ROCm worker	amd.example.com	22	ubuntu	/Users/YOU/.ssh/id_ed25519	-
+intel-demo	Intel	Intel accelerator	intel.example.com	22	ubuntu	/Users/YOU/.ssh/id_ed25519	-
