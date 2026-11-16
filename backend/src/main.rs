@@ -166,6 +166,43 @@ fn scp(p: &Profile, src: &str, dst: &str, download: bool) -> Result<(), String> 
         Err(format!("SCP exited with {status}"))
     }
 }
+fn connection_status(p: &Profile) -> Result<(), String> {
+    let mut args = ssh_args(p);
+    args.push("true".into());
+    let output = Command::new("ssh").args(args).output()
+        .map_err(|e| format!("Could not invoke SSH: {e}"))?;
+    if output.status.success() {
+        println!("REACHABLE\t{}", p.id);
+    } else {
+        println!("UNREACHABLE\t{}", p.id);
+    }
+    // The failure might be network, authentication, an offline VM, or deletion.
+    Ok(())
+}
+
+fn remove_profile(id: &str) -> Result<(), String> {
+    // Removes only the local TSV entry; does NOT destroy or stop a cloud instance.
+    let path = config_path();
+    let contents = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut found = 0;
+    let kept: Vec<&str> = contents.lines().filter(|line| {
+        let matches = !line.starts_with('#') && line.split('\t').next() == Some(id);
+        if matches { found += 1; }
+        !matches
+    }).collect();
+    if found != 1 {
+        return Err(format!("Expected one profile named {id}, found {found}; no changes made"));
+    }
+    let backup = path.with_extension("tsv.bak");
+    fs::copy(&path, &backup).map_err(|e| format!("Backup failed: {e}"))?;
+    let mut revised = kept.join("\n");
+    revised.push('\n');
+    fs::write(&path, revised).map_err(|e| format!("Failed to update profiles: {e}"))?;
+    println!("REMOVED_LOCAL_PROFILE\t{id}");
+    println!("Backup: {}", backup.display());
+    Ok(())
+}
+
 fn probe(p: &Profile) -> Result<(), String> {
     let cmd = match p.vendor.as_str() {
         "NVIDIA" => {
@@ -176,10 +213,29 @@ fn probe(p: &Profile) -> Result<(), String> {
     };
     ssh(p, cmd)
 }
-fn ai(p: &Profile) -> Result<(), String> {
-    let cmd="/venv/main/bin/python -c 'import torch; print(\"PyTorch:\",torch.__version__); print(\"CUDA/ROCm available:\",torch.cuda.is_available()); print(\"Devices:\", torch.cuda.device_count()); print(\"Device name:\",torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"No PyTorch GPU found\")'";
+fn telemetry(p: &Profile) -> Result<(), String> {
+    let cmd = match p.vendor.as_str() {
+        "NVIDIA" => "nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader,nounits",
+        "AMD" => "rocm-smi --showproductname --showuse --showmemuse --showtemp --showpower",
+        "Intel" => "xpu-smi stats",
+        _ => return Err("Unsupported GPU vendor".into()),
+    };
     ssh(p, cmd)
 }
+fn ai(p: &Profile) -> Result<(), String> {
+    // Noninteractive SSH does not activate the container's login environment.
+    // Probe common interpreter paths without assuming all providers use Vast.ai's venv.
+    let cmd = r#"for py in /venv/main/bin/python /opt/venv/bin/python python3 python; do
+        if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import torch' >/dev/null 2>&1; then
+            "$py" -c 'import torch; print("PyTorch:", torch.__version__); print("CUDA/ROCm available:", torch.cuda.is_available()); print("Devices:", torch.cuda.device_count()); print("Device name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No PyTorch GPU found")'
+            exit $?
+        fi
+    done
+    echo 'No Python interpreter with PyTorch found on remote worker' >&2
+    exit 127"#;
+    ssh(p, cmd)
+}
+
 fn render(p: &Profile, file: &str, frame: u32, out: &str) -> Result<(), String> {
     if !file.ends_with(".blend") || !std::path::Path::new(file).is_file() {
         return Err("Provide an existing .blend file".into());
@@ -218,13 +274,17 @@ fn stream(p: &Profile) -> Result<(), String> {
     }
 }
 fn usage() {
-    eprintln!("GPUShift CLI\n  gpushift list\n  gpushift probe <id>\n  gpushift ai <id>\n  gpushift render <id> <file.blend> <frame> <output-directory>\n  gpushift stream <id>\n  gpushift doctor\nProfiles: $GPUSHIFT_PROFILES or ~/.config/gpushift/profiles.tsv");
+    eprintln!("GPUShift CLI\n  gpushift list\n  gpushift status <id>\n  gpushift remove <id> --yes\n  gpushift probe <id>\n  gpushift telemetry <id>\n  gpushift ai <id>\n  gpushift render <id> <file.blend> <frame> <output-directory>\n  gpushift stream <id>\n  gpushift doctor\nProfiles: $GPUSHIFT_PROFILES or ~/.config/gpushift/profiles.tsv");
 }
 fn run() -> Result<(), String> {
     let a: Vec<String> = env::args().collect();
     if a.len() < 2 {
         usage();
         return Err("Missing command".into());
+    }
+    if a[1] == "--help" || a[1] == "-h" || a[1] == "help" {
+        usage();
+        return Ok(());
     }
     if a[1] == "doctor" {
         println!(
@@ -256,9 +316,18 @@ fn run() -> Result<(), String> {
         usage();
         return Err("Missing profile ID".into());
     }
+    if a[1] == "remove" {
+        if a.len() != 4 || a[3] != "--yes" {
+            return Err("To remove a local profile, use: gpushift remove <id> --yes (does not delete cloud resources)".into());
+        }
+        selected(&profiles, &a[2])?;
+        return remove_profile(&a[2]);
+    }
     let p = selected(&profiles, &a[2])?;
     match a[1].as_str() {
+        "status" => connection_status(p),
         "probe" => probe(p),
+        "telemetry" => telemetry(p),
         "ai" => ai(p),
         "stream" => stream(p),
         "render" => {
