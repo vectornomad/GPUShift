@@ -17,6 +17,8 @@ struct GPUProfile: Identifiable, Hashable {
   @Published var selectedID: String = ""
   @Published var output: String = "GPUShift ready. Load profiles to get started."
   @Published var busy: Bool = false
+  @Published var connectionState: String = "Not checked"
+  @Published var showRemoveConfirmation: Bool = false
   @Published var blendPath: String = ""
   @Published var renderFolder: String = ""
   @Published var frame: String = "1"
@@ -45,6 +47,44 @@ struct GPUProfile: Identifiable, Hashable {
     if !profiles.contains(where: { $0.id == selectedID }) { selectedID = profiles.first?.id ?? "" }
     output = "Loaded \(profiles.count) GPU profiles. No remote connection has been started."
   }
+  func checkConnection() { run("status") }
+  func removeSelectedProfile() {
+    guard let selected else { return }
+    let id = selected.id
+    busy = true
+    let bin = (binaryPath as NSString).expandingTildeInPath
+    let config = (profilesPath as NSString).expandingTildeInPath
+    Task.detached {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: bin)
+      process.arguments = ["remove", id, "--yes"]
+      var environment = ProcessInfo.processInfo.environment
+      environment["GPUSHIFT_PROFILES"] = config
+      process.environment = environment
+      let pipe = Pipe()
+      process.standardOutput = pipe
+      process.standardError = pipe
+      do {
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let result = String(decoding: output, as: UTF8.self)
+        await MainActor.run {
+          self.busy = false
+          if process.terminationStatus == 0 {
+            self.reload()
+            self.connectionState = "Not checked"
+          }
+          self.output = result + "\nExit code: \(process.terminationStatus)"
+        }
+      } catch {
+        await MainActor.run {
+          self.busy = false
+          self.output = "Unable to remove profile: \(error.localizedDescription)"
+        }
+      }
+    }
+  }
   func browseBlend() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [UTType(filenameExtension: "blend") ?? .data]
@@ -65,7 +105,9 @@ struct GPUProfile: Identifiable, Hashable {
     }
     let args: [String]
     switch command {
+    case "status": args = ["status", selected.id]
     case "probe": args = ["probe", selected.id]
+    case "telemetry": args = ["telemetry", selected.id]
     case "ai": args = ["ai", selected.id]
     case "stream": args = ["stream", selected.id]
     case "render":
@@ -103,6 +145,12 @@ struct GPUProfile: Identifiable, Hashable {
           self.output =
             stdout + (stderr.isEmpty ? "" : "\n" + stderr)
             + "\nExit code: \(process.terminationStatus)"
+          if command == "status" {
+            if process.terminationStatus != 0 { self.connectionState = "Check failed" }
+            else if stdout.hasPrefix("REACHABLE\t") { self.connectionState = "Reachable" }
+            else if stdout.hasPrefix("UNREACHABLE\t") { self.connectionState = "Unreachable (not necessarily deleted)" }
+            else { self.connectionState = "Unknown" }
+          }
           self.busy = false
         }
       } catch {
@@ -152,6 +200,7 @@ struct GPUShiftView: View {
             ForEach(items) { profile in
               Button {
                 model.selectedID = profile.id
+                model.connectionState = "Not checked"
               } label: {
                 HStack {
                   Image(
@@ -173,6 +222,13 @@ struct GPUShiftView: View {
           }
         }
       }
+      HStack {
+        Text("Connection: \(model.connectionState)")
+          .font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Button("Check Connection") { model.checkConnection() }
+        Button("Remove Profile", role: .destructive) { model.showRemoveConfirmation = true }
+      }.disabled(model.busy || model.selected == nil)
       Picker("Workload", selection: $model.mode) {
         Text("AI").tag("AI")
         Text("Blender").tag("Blender")
@@ -196,6 +252,7 @@ struct GPUShiftView: View {
       }
       HStack {
         Button("Check GPU") { model.run("probe") }
+        Button("Refresh Telemetry") { model.run("telemetry") }
         Button(
           model.mode == "AI"
             ? "Test PyTorch" : model.mode == "Blender" ? "Render frame" : "Open Moonlight"
@@ -219,7 +276,18 @@ struct GPUShiftView: View {
       }
       Text("Remote jobs and streams only. Native macOS Metal rendering stays on Apple M2.")
         .font(.caption).foregroundStyle(.secondary)
-    }.padding(20).frame(width: 520).frame(minHeight: 620)
+    }
+    .padding(20).frame(width: 520).frame(minHeight: 620)
+    .confirmationDialog(
+      "Remove \(model.selected?.label ?? "selected GPU") from GPUShift?",
+      isPresented: $model.showRemoveConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Remove local profile", role: .destructive) { model.removeSelectedProfile() }
+      Button("Cancel", role: .cancel) { }
+    } message: {
+      Text("Only deletes the saved local profile. It does not stop or destroy a rented GPU. A backup of profiles.tsv will be created.")
+    }
   }
 }
 
