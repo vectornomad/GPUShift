@@ -1,0 +1,60 @@
+
+# Swift Package Manager build artifacts
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Package.resolved.bak
+
+# Xcode build artifacts
+DerivedData/
+build/
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Xcode user-specific settings
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcsettings
+
+# Swift compiler files
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.dia
+
+# Code signing and credentials
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.key
+.env
+.env.*
+!.env.example
+
+# Local configuration
+Config.local.swift
+Secrets.swift
+*.local.xcconfig
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE configuration
+.idea/
+.vscode/
