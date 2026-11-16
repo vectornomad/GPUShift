@@ -1,0 +1,41 @@
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Rust compiler and debug files
+*.pdb
+*.dSYM/
+*.profraw
+*.profdata
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+*.swo
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Local configuration
+config.local.toml
+profiles.local.tsv
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor files
+.vscode/
+.idea/
+*.iml
