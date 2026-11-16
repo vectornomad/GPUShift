@@ -274,8 +274,40 @@ fn stream(p: &Profile) -> Result<(), String> {
     }
 }
 fn usage() {
-    eprintln!("GPUShift CLI\n  gpushift list\n  gpushift status <id>\n  gpushift remove <id> --yes\n  gpushift probe <id>\n  gpushift telemetry <id>\n  gpushift ai <id>\n  gpushift render <id> <file.blend> <frame> <output-directory>\n  gpushift stream <id>\n  gpushift doctor\nProfiles: $GPUSHIFT_PROFILES or ~/.config/gpushift/profiles.tsv");
+    eprintln!("GPUShift CLI\n  gpushift list\n  gpushift status <id>\n  gpushift remove <id> --yes\n  gpushift probe <id>\n  gpushift telemetry <id>\n  gpushift ai <id>\n  gpushift render <id> <file.blend> <frame> <output-directory>\n  gpushift stream <id>\n  gpushift doctor\n  gpushift vast offers\n  gpushift vast instances\nProfiles: $GPUSHIFT_PROFILES or ~/.config/gpushift/profiles.tsv");
 }
+// Read-only Vast.ai discovery, delegated to the official Vast.ai CLI.
+// Never pass credentials through GPUShift config or CLI arguments.
+fn vast_binary() -> PathBuf {
+    if let Ok(path) = env::var("VASTAI_BIN") {
+        if !path.is_empty() { return PathBuf::from(path); }
+    }
+    if let Ok(home) = env::var("HOME") {
+        let path = PathBuf::from(home).join(".local/bin/vastai");
+        if path.is_file() { return path; }
+    }
+    for name in ["/opt/homebrew/bin/vastai", "/usr/local/bin/vastai"] {
+        let path = PathBuf::from(name);
+        if path.is_file() { return path; }
+    }
+    PathBuf::from("vastai")
+}
+fn vast_command(args: &[String]) -> Result<(), String> {
+    let subcommand = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    let flags: Vec<&str> = match subcommand {
+        "offers" => vec!["search", "offers", "num_gpus=1 rentable=true", "--limit", "10"],
+        "instances" => vec!["show", "instances"],
+        _ => return Err("Usage: gpushift vast offers | gpushift vast instances".into()),
+    };
+    if args.len() != 3 {
+        return Err("Usage: gpushift vast offers | gpushift vast instances".into());
+    }
+    let status = Command::new(vast_binary()).args(flags).status()
+        .map_err(|e| format!("Vast.ai CLI unavailable ({e}). Install from https://cloud.vast.ai/cli/ then run `vastai set api-key` locally."))?;
+    if status.success() { Ok(()) }
+    else { Err(format!("Vast.ai command exited with {status}")) }
+}
+
 fn run() -> Result<(), String> {
     let a: Vec<String> = env::args().collect();
     if a.len() < 2 {
@@ -305,6 +337,7 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
+    if a[1] == "vast" { return vast_command(&a); }
     let profiles = load()?;
     if a[1] == "list" {
         for p in &profiles {

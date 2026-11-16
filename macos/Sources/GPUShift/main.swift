@@ -85,6 +85,40 @@ struct GPUProfile: Identifiable, Hashable {
       }
     }
   }
+  // Provider operations are read-only in this release. No cloud rental is started.
+  func runVast(_ action: String) {
+    guard action == "offers" || action == "instances", !busy else { return }
+    busy = true
+    output = action == "offers" ? "Searching Vast.ai GPU offers…" : "Fetching Vast.ai instances…"
+    let bin = (binaryPath as NSString).expandingTildeInPath
+    Task.detached {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: bin)
+      process.arguments = ["vast", action]
+      let out = Pipe()
+      let err = Pipe()
+      process.standardOutput = out
+      process.standardError = err
+      do {
+        try process.run()
+        let stdoutTask = Task.detached { out.fileHandleForReading.readDataToEndOfFile() }
+        let stderrTask = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
+        process.waitUntilExit()
+        let stdout = String(decoding: await stdoutTask.value, as: UTF8.self)
+        let stderr = String(decoding: await stderrTask.value, as: UTF8.self)
+        await MainActor.run {
+          self.output = stdout + (stderr.isEmpty ? "" : "\n" + stderr)
+            + "\nExit code: \(process.terminationStatus)"
+          self.busy = false
+        }
+      } catch {
+        await MainActor.run {
+          self.output = "Unable to launch GPUShift provider command: \(error.localizedDescription)"
+          self.busy = false
+        }
+      }
+    }
+  }
   func browseBlend() {
     let panel = NSOpenPanel()
     panel.allowedContentTypes = [UTType(filenameExtension: "blend") ?? .data]
@@ -189,6 +223,17 @@ struct GPUShiftView: View {
         Spacer()
         Button("Reload") { model.reload() }
       }
+      HStack {
+        Text("Vast.ai marketplace").font(.headline)
+        Spacer()
+        Text("Read-only").font(.caption).foregroundStyle(.secondary)
+      }
+      HStack {
+        Button("Find GPUs") { model.runVast("offers") }
+        Button("My Instances") { model.runVast("instances") }
+      }.disabled(model.busy)
+      Text("Provider search does not create or charge for instances.")
+        .font(.caption).foregroundStyle(.secondary)
       if model.profiles.isEmpty {
         Text("No profiles configured. Add a GPU worker in profiles.tsv.").foregroundStyle(
           .secondary)
